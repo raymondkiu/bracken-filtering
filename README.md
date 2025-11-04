@@ -1,7 +1,7 @@
 # bracken-filtering
 Filter Bracken outputs (metagenomics)
 ```
-Usage: ./bracken_extract_data3.sh [-f | -n] -o <output_file> -i <input_file> [-a] [-b <percentage>]
+Usage: ./bracken_extract_data.sh [-f | -n] -o <output_file> -i <input_file> [-a] [-b <percentage>]
 
 Options:
   -f    Extract columns ending with '_frac' and multiply by 100 (4 decimal places)
