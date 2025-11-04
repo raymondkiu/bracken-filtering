@@ -1,0 +1,149 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Description:
+# This script processes Bracken outputs with tab-separated columns.
+# Handles cases where the first column (name) may contain spaces,
+# and ensures splitting is strictly based on tabs.
+#
+# Example Bracken Output:
+# name    taxonomy_id    taxonomy_lvl    10a-genus_num    10a-genus_frac    ...
+# Bacteroides    43874    G    71015    0.74661    ...
+# Clostridium sensu stricto 1    45342    G    9242    0.09716    ...
+#
+# Features:
+# - Auto-detect first three metadata columns: name, taxonomy_id, taxonomy_lvl
+# - Extract columns ending with "_num" or "_frac"
+# - For "_frac" mode: multiply by 100 and format to 4 decimal places
+# - Optional filtering (-b): remove rows below threshold and sum them into "Other"
+# - Optional author display (-a): prints "Author: Raymond Kiu"
+#
+# Example Usage:
+# ./extract_columns.sh -f -o frac_filtered.tsv -i input.tsv -b 5 -a
+# ./extract_columns.sh -n -o num_output.tsv -i input.tsv
+
+show_help() {
+    echo "Usage: $0 [-f | -n] -o <output_file> -i <input_file> [-a] [-b <percentage>]"
+    echo ""
+    echo "Options:"
+    echo "  -f    Extract columns ending with '_frac' and multiply by 100 (4 decimal places)"
+    echo "  -n    Extract columns ending with '_num'"
+    echo "  -o    Output filename"
+    echo "  -i    Input filename"
+    echo "  -a    Show author name (Raymond Kiu)"
+    echo "  -b    Filter threshold (only for -f mode)"
+    echo ""
+    echo "Example Usage:"
+    echo "  ./extract_columns.sh -f -o frac_filtered.tsv -i input.tsv -b 5 -a"
+    echo "  ./extract_columns.sh -n -o num_output.tsv -i input.tsv"
+    exit 1
+}
+
+MODE=""
+OUTPUT=""
+INPUT=""
+SHOW_AUTHOR=false
+THRESHOLD=""
+
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        -f) MODE="frac"; shift ;;
+        -n) MODE="num"; shift ;;
+        -o) OUTPUT="$2"; shift 2 ;;
+        -i) INPUT="$2"; shift 2 ;;
+        -a) SHOW_AUTHOR=true; shift ;;
+        -b) THRESHOLD="$2"; shift 2 ;;
+        *) show_help ;;
+    esac
+done
+
+# Validate arguments
+if [[ -z "$MODE" || -z "$OUTPUT" || -z "$INPUT" ]]; then
+    show_help
+fi
+
+# Check input file exists
+if [[ ! -f "$INPUT" ]]; then
+    echo "❌ Error: Input file '$INPUT' not found."
+    exit 1
+fi
+
+# Check output directory is writable
+OUTDIR=$(dirname "$OUTPUT")
+if [[ ! -d "$OUTDIR" ]]; then
+    echo "❌ Error: Output directory '$OUTDIR' does not exist."
+    exit 1
+fi
+
+HEADER=$(head -n 1 "$INPUT")
+IFS=$'\t' read -r -a COLS <<< "$HEADER"
+
+META_COLS=(1 2 3)
+INDICES=("${META_COLS[@]}")
+
+for i in "${!COLS[@]}"; do
+    if [[ "${COLS[$i]}" == *"_$MODE" ]]; then
+        INDICES+=($((i+1)))
+    fi
+done
+
+INDEX_STR=$(IFS=','; echo "${INDICES[*]}")
+
+if [[ "$MODE" == "frac" ]]; then
+    awk -F '\t' -v idx="$INDEX_STR" -v threshold="$THRESHOLD" '
+    BEGIN {
+        split(idx, cols, ",")
+        ncols = length(cols)
+        for (i = 1; i <= ncols; i++) sum[i] = 0
+    }
+    NR == 1 {
+        out=""
+        for (i = 1; i <= ncols; i++) out = out (i==1 ? "" : "\t") $cols[i]
+        print out
+        next
+    }
+    {
+        keep = 0
+        row_vals[ncols] = ""
+        for (i = 1; i <= ncols; i++) {
+            val = $cols[i]
+            if (i > 3) {
+                val = val * 100
+                val = sprintf("%.4f", val)
+                if (threshold != "" && val >= threshold) keep = 1
+            }
+            row_vals[i] = val
+        }
+        if (threshold == "" || keep == 1) {
+            out=""
+            for (i = 1; i <= ncols; i++) out = out (i==1 ? "" : "\t") row_vals[i]
+            print out
+        } else {
+            for (i = 4; i <= ncols; i++) sum[i] += row_vals[i]
+        }
+    }
+    END {
+        if (threshold != "") {
+            out="Other\tNA\tNA"
+            for (i = 4; i <= ncols; i++) out = out "\t" sprintf("%.4f", sum[i])
+            print out
+        }
+    }
+    ' "$INPUT" > "$OUTPUT"
+else
+    awk -F '\t' -v idx="$INDEX_STR" '
+    BEGIN { split(idx, cols, ",") }
+    {
+        out=""
+        for (i in cols) {
+            out = out (i==1 ? "" : "\t") $cols[i]
+        }
+        print out
+    }
+    ' "$INPUT" > "$OUTPUT"
+fi
+
+echo "Extraction complete. Mode: $MODE. Output saved to $OUTPUT"
+if $SHOW_AUTHOR; then
+    echo "Author: Raymond Kiu"
+fi
